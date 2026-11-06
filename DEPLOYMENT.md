@@ -83,13 +83,22 @@ before major rework cycles here.
 - **MariaDB version pin** (high): upstream example pins
   `lscr.io/linuxserver/mariadb:11.4.8`; base stage mirrors that pin
   unless the gate invalidates it. → Stage A observes migration import
-  completeness.
+  completeness. **VALIDATED** (Stage A: 131 Flyway migrations applied
+  cleanly on 11.4.8; app boots green).
 - **First-run bootstrap shape** (medium): assumed "first visiting user
   creates the admin account via the UI"; the gate observes the actual
   flow (registration form vs invite vs env-seeded credentials).
+  **VALIDATED** (Stage A: first-run wizard creates the admin account in
+  the UI, then normal login).
 - **Port/healthcheck semantics** (medium): `:6060` is the documented
   single port; gate observes whether a Spring Actuator health endpoint
   exists for compose healthchecks or only the UI root answers.
+  **VALIDATED** — `/api/v1/healthcheck` on :6060 answers UP (compose
+  healthcheck green).
+- **Named-volume ownership** (observed at gate): fresh `booklore-books`
+  volume is root-owned → bookdrop finalize fails ("Failed to move
+  file"). Fixed with a one-shot `booklore-vol-init` chown service
+  (validated live: init exit 0, `/books` owned by booklore).
 - **OIDC UI-config confidence** (high): provider config is DB-stored
   (V127) and no env surface exists — the §10 UI-only OIDC pattern
   applies as recorded; gate confirms post-deploy in-app configuration

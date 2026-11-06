@@ -1,0 +1,13 @@
+services:
+  booklore:
+    environment:
+      VIRTUAL_PORT: ${VIRTUAL_PORT:-6060}
+      VIRTUAL_HOST: ${VIRTUAL_HOST:?}
+      LETSENCRYPT_HOST: ${LETSENCRYPT_HOST:?}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:?}
+    networks:
+      - step-ca-network
+
+networks:
+  step-ca-network:
+    external: true

@@ -1,0 +1,4 @@
+services:
+  booklore:
+    ports:
+      - ${BOOKLORE_PORT:-6060}:6060

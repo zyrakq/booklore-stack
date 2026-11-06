@@ -1,0 +1,17 @@
+{
+  "git.openRepositoryInParentFolders": "never",
+  "git.detectSubmodules": false,
+  "git.scanRepositories": [],
+  "git.autoRepositoryDetection": false,
+  "files.associations": {
+    "LICENSE-APACHE": "plaintext",
+    "LICENSE-MIT": "plaintext",
+    ".gitmessage": "plaintext"
+  },
+  "[dockerfile]": {
+    "editor.formatOnSave": false
+  },
+  "files.exclude": {
+    "**/.git": false
+  }
+}

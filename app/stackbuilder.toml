@@ -1,0 +1,32 @@
+[paths]
+environments_path = "./environments"
+
+[build]
+skip_base_generation = true
+yaml_merger = "yq"
+# No extensions implemented yet — DEPLOYMENT.md catalog extensions (oidc,
+# s3fs-fuse on library volumes, remote-auth proxy, SMTP, TLS proxy) stay
+# `available` until confirmed. Base = core group `booklore` + mandatory
+# MariaDB `booklore-db` (single-non-postgres-DB exception, §8).
+extensions = []
+
+[build.combos]
+# ONE base combo = the functional base (app + base MariaDB). sb forbids
+# empty combos (STASKBUILDER L9); "core" is a placeholder extension name —
+# sb warns it is not found and renders base+env only.
+entire = ["core"]
+
+[build.environments]
+available = ["forwarding", "letsencrypt", "step-ca"]
+
+[build.environments.forwarding]
+extensions = []
+combos = ["entire"]
+
+[build.environments.letsencrypt]
+extensions = []
+combos = ["entire"]
+
+[build.environments.step-ca]
+extensions = []
+combos = ["entire"]
