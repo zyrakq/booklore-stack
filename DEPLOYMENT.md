@@ -71,7 +71,7 @@ cannot boot.
 | Remote-auth reverse proxy (`REMOTE_AUTH_*` headers) | product | available | forward-auth-capable proxy; upstream doc `docs/forward-auth-with-proxy.md` |
 | SMTP (email→PDF delivery) | product | available | SMTP server; configured in app settings UI (not compose env) |
 | s3fs-fuse on `/books` `/bookdrop` | infra | available | RustFS/S3 bucket; never on `/app/data` or DB volume |
-| TLS reverse proxy / step-ca-trust (public origin + secure-cookie overlay) | infra | **implemented** | env fragment (`STEP_CA_TRUST`/`STEP_CA_TRUST_RESTART`) wired into the `step-ca` environment; companion installs the bundle into `/usr/local/share/ca-certificates`. JVM caveat: the JVM does NOT read that path — the step-ca root CA must also land in the Java `cacerts` truststore (keytool import) for OIDC back-channel calls (PKIX). Stage validated in the forwarding gate by importing the CA directly into the container's cacerts. |
+| TLS reverse proxy / step-ca-trust (public origin + secure-cookie overlay) | infra | **implemented** | `step-ca` environment (nginx + acme-companion behind step-ca-proxy) + companion extension `step-ca-trust`: mounts `step-ca-data` subpath `certs` read-only at `/step-ca-root` and an entrypoint wrapper imports the root CA into the **Java `cacerts` truststore** (keytool, as root before `entrypoint.sh` drops privileges via su-exec) on every start — the JVM does not read `/usr/local/share/ca-certificates`, and recreates never lose the trust. Required for the OIDC back-channel (PKIX) when kanidm.af sits behind step-ca TLS. |
 
 **Maintenance-status note**: upstream HEAD commit (`01b3407`) announces
 **BookOrbit** as the successor of BookLore — overlap risk with the

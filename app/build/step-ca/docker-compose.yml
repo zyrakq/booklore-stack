@@ -44,11 +44,6 @@ services:
       VIRTUAL_HOST: ${VIRTUAL_HOST:?}
       LETSENCRYPT_HOST: ${LETSENCRYPT_HOST:?}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:?}
-      # JVM back channel (OIDC discovery / token exchange against kanidm.af
-      # behind step-ca-proxy) must trust the step-ca root CA. The companion
-      # installs the CA into the container and honors the restart flag.
-      STEP_CA_TRUST: ${STEP_CA_TRUST:-true}
-      STEP_CA_TRUST_RESTART: ${STEP_CA_TRUST_RESTART:-true}
     depends_on:
       booklore-db:
         condition: service_healthy
@@ -66,10 +61,35 @@ services:
       - booklore-data:/app/data
       - booklore-books:/books
       - booklore-bookdrop:/bookdrop
+      - type: volume
+        source: step-ca-data
+        target: /step-ca-root
+        read_only: true
+        volume:
+          subpath: certs
     stop_grace_period: 30s
     networks:
       - booklore-network
       - step-ca-network
+    # JVM apps have no NODE_EXTRA_CA_CERTS equivalent: the step-ca root CA
+    # must be imported into the JVM truststore (cacerts). The image's
+    # entrypoint.sh drops privileges via su-exec, so the import runs in an
+    # entrypoint wrapper as root BEFORE the app starts — this re-runs on
+    # every container start, so recreates never lose the trust.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -f /step-ca-root/root_ca.crt ]; then
+          keytool -delete -alias step-ca-root -cacerts -storepass changeit >/dev/null 2>&1 || true
+          keytool -importcert -noprompt -alias step-ca-root -cacerts -storepass changeit \
+            -file /step-ca-root/root_ca.crt >/dev/null 2>&1 \
+            && echo "step-ca root CA imported into JVM truststore" \
+            || echo "WARNING: step-ca root CA import failed"
+        fi
+        exec entrypoint.sh "$$@"
+      - --
+    command: ["java", "-jar", "/app/app.jar"]
   booklore-db:
     container_name: booklore-db
     image: ${MARIADB_IMAGE:-lscr.io/linuxserver/mariadb:11.4.8}
@@ -103,6 +123,8 @@ volumes:
     name: booklore-bookdrop
   booklore-db:
     name: booklore-db
+  step-ca-data:
+    external: true
 networks:
   booklore-network:
     name: booklore-network
