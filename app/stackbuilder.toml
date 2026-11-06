@@ -4,10 +4,14 @@ environments_path = "./environments"
 [build]
 skip_base_generation = true
 yaml_merger = "yq"
+# Copy non-compose files (the s3fs-fuse entrypoint script) from component
+# dirs into the generated build dirs.
+copy_additional_files = true
 # Extension pool: oidc is mandatory infra (§10) — provider configured via
 # the app's settings UI (stored in MariaDB, no env surface). step-ca-trust
 # is mandatory infra for the step-ca environment (JVM outbound TLS trust).
-extensions = ["oidc", "step-ca-trust"]
+# s3fs-fuse is the optional RustFS-backed library (no native S3 backend).
+extensions = ["oidc", "step-ca-trust", "s3fs-fuse"]
 
 [build.combos]
 # ONE base combo = the functional base (app + mandatory MariaDB booklore-db
@@ -15,13 +19,20 @@ extensions = ["oidc", "step-ca-trust"]
 entire = ["oidc"]
 # step-ca variant adds CA trust for outbound TLS (OIDC discovery).
 entire-trust = ["oidc", "step-ca-trust"]
+# s3fs-fuse gate combo: RustFS-backed library volumes (forwarding env —
+# kept out of entire-trust so the two entrypoint-replacing fragments
+# never merge into one variant).
+entire-s3fs = ["oidc", "s3fs-fuse"]
 
 [build.environments]
 available = ["forwarding", "letsencrypt", "step-ca"]
 
 [build.environments.forwarding]
-extensions = []
-combos = ["entire"]
+# s3fs-fuse: gate env for the RustFS-backed library (omnibus precedent —
+# the fragment declares the external step-ca-network toward
+# http://rustfs:9000).
+extensions = ["s3fs-fuse"]
+combos = ["entire", "entire-s3fs"]
 
 [build.environments.letsencrypt]
 extensions = []

@@ -1,0 +1,75 @@
+# s3fs-fuse extension: serves both libraries from RustFS buckets
+# (booklore-books, booklore-bookdrop) instead of the local named volumes.
+# Booklore has no native S3 support (DEPLOYMENT.md ~line 53: libraries are
+# plain filesystem folders), so the service gets an s3fs-enabled image
+# built inline from the base image and an entrypoint wrapper that mounts
+# the buckets at /books + /bookdrop before exec'ing the original
+# entrypoint.
+#
+# /app/data (settings DB backups, uploads) and the MariaDB volume
+# (booklore-db) are NEVER on S3: those stay local (DEPLOYMENT.md §5:
+# s3fs-fuse only on the library volumes, never on /app/data or the DB).
+#
+# NOTE: stackbuilder merges volume lists append-only, so the base
+# `booklore-books:/books` + `booklore-bookdrop:/bookdrop` mounts cannot
+# be removed here; the entrypoint wrapper umounts them at start so the
+# buckets are the only library sources. The one-shot booklore-vol-init
+# chown stays valid — it fixes the local volume roots, which the wrapper
+# umounts anyway.
+#
+# Wired into the forwarding environment (gate env), following the
+# omnibus/navidrome precedent: the fragment declares the external
+# step-ca-network where the live RustFS stack runs; the merger appends it
+# to the base booklore-network attachment so the container can reach
+# http://rustfs:9000.
+services:
+  booklore:
+    # Distinct tag so a rebuild never clobbers the published image used
+    # by the base deployment.
+    image: ${BOOKLORE_S3FS_IMAGE:-localhost/booklore-s3fs:latest}
+    # The base image has no USER directive (starts as root; the original
+    # entrypoint su-exec's down to booklore after mounting) — explicit
+    # for clarity: mounting s3fs requires root.
+    user: root
+    # String form (not a list) so the merge REPLACES the image ENTRYPOINT
+    # (["entrypoint.sh"], CMD ["java","-jar","/app/app.jar"]) instead of
+    # appending to it; the wrapper execs the original entrypoint, which
+    # does the USER_ID/GROUP_ID remap + su-exec itself.
+    entrypoint: /usr/local/bin/s3fs-entrypoint
+    # Full original start line — the original entrypoint ends in
+    # `exec su-exec "$USER_ID:$GROUP_ID" "$@"`, receiving the java
+    # command as its argument.
+    command: entrypoint.sh java -jar /app/app.jar
+    environment:
+      S3FS_ENDPOINT: ${S3FS_ENDPOINT:-http://rustfs:9000}
+      S3FS_BOOKS_BUCKET: "${S3FS_BOOKS_BUCKET:?S3FS_BOOKS_BUCKET is required}"
+      S3FS_BOOKDROP_BUCKET: "${S3FS_BOOKDROP_BUCKET:?S3FS_BOOKDROP_BUCKET is required}"
+      S3FS_ARGS: ${S3FS_ARGS:-}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse:/dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    networks:
+      - step-ca-network
+    build:
+      # Local build context: stackbuilder copies s3fs-entrypoint.sh into
+      # every merged build dir next to this compose (and it already sits
+      # next to the raw fragment), so the current directory is the build
+      # context — no extra subdir needed. Layered runs MUST pass
+      # `--project-directory .` (PITFALLS P-061).
+      context: .
+      dockerfile_inline: |
+        FROM ghcr.io/booklore-app/booklore@sha256:f92dae443c38098bf8348742465f6f3b17b619cb8f0e5c2cf195dcdfbb88eaeb
+        USER root
+        RUN apk add --no-cache s3fs-fuse fuse3 \
+         && echo user_allow_other >> /etc/fuse.conf
+        COPY s3fs-entrypoint.sh /usr/local/bin/s3fs-entrypoint
+        RUN chmod 0755 /usr/local/bin/s3fs-entrypoint
+
+networks:
+  step-ca-network:
+    external: true
