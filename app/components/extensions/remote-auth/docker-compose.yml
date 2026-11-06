@@ -1,0 +1,93 @@
+# remote-auth extension (DEPLOYMENT.md extension catalog): BookLore
+# forward-auth wiring (upstream doc docs/forward-auth-with-proxy.md).
+# When REMOTE_AUTH_ENABLED=true the app fully trusts a configurable set of
+# identity headers (remote-user / remote-name / remote-email / remote-groups
+# by default — all-lowercase, see env comment) and auto-creates the user on
+# first visit
+# (REMOTE_AUTH_CREATE_NEW_USERS=true); REMOTE_AUTH_ADMIN_GROUP grants group
+# members admin rights.
+#
+# The fragment adds the bundled nginx reverse proxy
+# (booklore-remoteauth-proxy, navidrome extauth-proxy precedent) so the
+# flow is self-contained and gateable in the forwarding environment; in
+# production it pairs with the collection's nginx-proxy vhost plumbing
+# (point the vhost at this proxy instead of booklore directly).
+#
+# No header spoofing: BookLore trusts the headers unconditionally (no IP
+# trust layer like Navidrome's ExtAuth.TrustedSources), so the proxy
+# OVERRIDES every identity header on each hop — an empty value makes
+# nginx omit the header entirely, which both strips any client-supplied
+# Remote-* header and (values empty = plain reverse proxy) falls back to
+# BookLore's normal login page. The header names on the strip lines come
+# from the same ${REMOTE_AUTH_HEADER_*} vars the app reads, so they can
+# never drift apart.
+#
+# Residual risk (documented upstream): while REMOTE_AUTH_ENABLED=true, a
+# direct connection to booklore:6060 could send the identity headers
+# itself. The forwarding environment keeps the base :6060 publish (ports
+# merge append-only), so scope :6060 to trusted networks in production or
+# remove the publish — in the vhost environments the fragment is
+# typically used with the 6061 proxy as the only exposure.
+#
+# booklore-network is NOT redeclared here: the base file defines it and
+# the merged model keeps that definition (only NEW networks need
+# declaring, cf. s3fs-fuse / navidrome extauth-proxy).
+services:
+  booklore:
+    environment:
+      REMOTE_AUTH_ENABLED: ${REMOTE_AUTH_ENABLED:-true}
+      REMOTE_AUTH_CREATE_NEW_USERS: ${REMOTE_AUTH_CREATE_NEW_USERS:-true}
+      # Header names — shared with the proxy below (single source of truth).
+      # Header names MUST be all-lowercase — the app's header map lookup is
+      # case-sensitive (Spring 7) against the lowercased config value.
+      REMOTE_AUTH_HEADER_USER: ${REMOTE_AUTH_HEADER_USER:-remote-user}
+      REMOTE_AUTH_HEADER_NAME: ${REMOTE_AUTH_HEADER_NAME:-remote-name}
+      REMOTE_AUTH_HEADER_EMAIL: ${REMOTE_AUTH_HEADER_EMAIL:-remote-email}
+      REMOTE_AUTH_HEADER_GROUPS: ${REMOTE_AUTH_HEADER_GROUPS:-remote-groups}
+      REMOTE_AUTH_ADMIN_GROUP: ${REMOTE_AUTH_ADMIN_GROUP:-admin}
+
+  booklore-remoteauth-proxy:
+    container_name: booklore-remoteauth-proxy
+    # Distinct tag so a rebuild never clobbers the published image.
+    image: ${BOOKLORE_REMOTEAUTH_PROXY_IMAGE:-localhost/booklore-remoteauth-proxy:latest}
+    build:
+      # Relative build context: layered runs MUST pass
+      # `--project-directory .` (PITFALLS P-061) so `context: .` resolves
+      # to build/<env>/entire-remoteauth/ (where stackbuilder copies the
+      # nginx template next to this merged fragment —
+      # copy_additional_files = true in stackbuilder.toml).
+      context: .
+      dockerfile_inline: |
+        FROM nginx:alpine
+        COPY default.conf.template /etc/nginx/templates/default.conf.template
+    # The official nginx image envsubst's /etc/nginx/templates/*.template
+    # with the container's declared env vars only — nginx runtime vars
+    # ($host, $remote_addr, ...) survive substitution.
+    environment:
+      # Upstream <service>:<port> of the base booklore service.
+      EXTAUTH_UPSTREAM: ${EXTAUTH_UPSTREAM:-booklore:6060}
+      # Header names injected/stripped — must match REMOTE_AUTH_HEADER_*.
+      EXTAUTH_HEADER_USER: ${REMOTE_AUTH_HEADER_USER:-remote-user}
+      EXTAUTH_HEADER_NAME: ${REMOTE_AUTH_HEADER_NAME:-remote-name}
+      EXTAUTH_HEADER_EMAIL: ${REMOTE_AUTH_HEADER_EMAIL:-remote-email}
+      EXTAUTH_HEADER_GROUPS: ${REMOTE_AUTH_HEADER_GROUPS:-remote-groups}
+      # Identity to inject; any empty value = that header is not sent
+      # (_client-supplied copies are still stripped) and BookLore shows
+      # its normal login page.
+      EXTAUTH_USER: ${EXTAUTH_USER:-}
+      EXTAUTH_NAME: ${EXTAUTH_NAME:-}
+      EXTAUTH_EMAIL: ${EXTAUTH_EMAIL:-}
+      EXTAUTH_GROUPS: ${EXTAUTH_GROUPS:-}
+    ports:
+      - "${BOOKLORE_REMOTEAUTH_PORT:-6061}:80"
+    depends_on:
+      - booklore
+    healthcheck:
+      # 127.0.0.1, not localhost: nginx listens IPv4-only and Alpine
+      # resolves localhost to ::1 first (connection refused).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - booklore-network

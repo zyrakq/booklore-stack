@@ -1,0 +1,185 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-10m}
+    max-file: ${LOG_MAX_FILE:-3}
+    compress: ${LOG_COMPRESS:-true}
+# remote-auth extension (DEPLOYMENT.md extension catalog): BookLore
+# forward-auth wiring (upstream doc docs/forward-auth-with-proxy.md).
+# When REMOTE_AUTH_ENABLED=true the app fully trusts a configurable set of
+# identity headers (remote-user / remote-name / remote-email / remote-groups
+# by default — all-lowercase, see env comment) and auto-creates the user on
+# first visit
+# (REMOTE_AUTH_CREATE_NEW_USERS=true); REMOTE_AUTH_ADMIN_GROUP grants group
+# members admin rights.
+#
+# The fragment adds the bundled nginx reverse proxy
+# (booklore-remoteauth-proxy, navidrome extauth-proxy precedent) so the
+# flow is self-contained and gateable in the forwarding environment; in
+# production it pairs with the collection's nginx-proxy vhost plumbing
+# (point the vhost at this proxy instead of booklore directly).
+#
+# No header spoofing: BookLore trusts the headers unconditionally (no IP
+# trust layer like Navidrome's ExtAuth.TrustedSources), so the proxy
+# OVERRIDES every identity header on each hop — an empty value makes
+# nginx omit the header entirely, which both strips any client-supplied
+# Remote-* header and (values empty = plain reverse proxy) falls back to
+# BookLore's normal login page. The header names on the strip lines come
+# from the same ${REMOTE_AUTH_HEADER_*} vars the app reads, so they can
+# never drift apart.
+#
+# Residual risk (documented upstream): while REMOTE_AUTH_ENABLED=true, a
+# direct connection to booklore:6060 could send the identity headers
+# itself. The forwarding environment keeps the base :6060 publish (ports
+# merge append-only), so scope :6060 to trusted networks in production or
+# remove the publish — in the vhost environments the fragment is
+# typically used with the 6061 proxy as the only exposure.
+#
+# booklore-network is NOT redeclared here: the base file defines it and
+# the merged model keeps that definition (only NEW networks need
+# declaring, cf. s3fs-fuse / navidrome extauth-proxy).
+services:
+  # Fresh named volumes (booklore-books, booklore-bookdrop) are created
+  # root-owned; the app's finalize step then fails with "Failed to move
+  # file". A one-shot chown fixes ownership before the app starts
+  # (validated during the Stage A gate).
+  booklore-vol-init:
+    container_name: booklore-vol-init
+    image: ${IMAGE:-ghcr.io/booklore-app/booklore:latest}
+    user: root
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c", "chown -R ${USER_ID:-1000}:${GROUP_ID:-1000} /books /bookdrop /app/data"]
+    volumes:
+      - booklore-data:/app/data
+      - booklore-books:/books
+      - booklore-bookdrop:/bookdrop
+    networks:
+      - booklore-network
+  booklore:
+    container_name: booklore
+    image: ${IMAGE:-ghcr.io/booklore-app/booklore:latest}
+    restart: unless-stopped
+    init: true
+    logging: *default-logging
+    environment:
+      USER_ID: ${USER_ID:-1000}
+      GROUP_ID: ${GROUP_ID:-1000}
+      TZ: ${TZ:-UTC}
+      DATABASE_URL: jdbc:mariadb://booklore-db:3306/${DATABASE_NAME:-booklore}
+      DATABASE_USERNAME: ${DATABASE_USERNAME:-booklore}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-false}
+      FORCE_DISABLE_OIDC: ${FORCE_DISABLE_OIDC:-false}
+      REMOTE_AUTH_ENABLED: ${REMOTE_AUTH_ENABLED:-true}
+      REMOTE_AUTH_CREATE_NEW_USERS: ${REMOTE_AUTH_CREATE_NEW_USERS:-true}
+      # Header names — shared with the proxy below (single source of truth).
+      # Header names MUST be all-lowercase — the app's header map lookup is
+      # case-sensitive (Spring 7) against the lowercased config value.
+      REMOTE_AUTH_HEADER_USER: ${REMOTE_AUTH_HEADER_USER:-remote-user}
+      REMOTE_AUTH_HEADER_NAME: ${REMOTE_AUTH_HEADER_NAME:-remote-name}
+      REMOTE_AUTH_HEADER_EMAIL: ${REMOTE_AUTH_HEADER_EMAIL:-remote-email}
+      REMOTE_AUTH_HEADER_GROUPS: ${REMOTE_AUTH_HEADER_GROUPS:-remote-groups}
+      REMOTE_AUTH_ADMIN_GROUP: ${REMOTE_AUTH_ADMIN_GROUP:-admin}
+    depends_on:
+      booklore-db:
+        condition: service_healthy
+      booklore-vol-init:
+        condition: service_completed_successfully
+    # Upstream-documented healthcheck (example-docker/docker-compose.yml);
+    # validated during the Stage A gate.
+    healthcheck:
+      test: wget -q -O - http://localhost:6060/api/v1/healthcheck
+      interval: 60s
+      retries: 5
+      start_period: 60s
+      timeout: 10s
+    volumes:
+      - booklore-data:/app/data
+      - booklore-books:/books
+      - booklore-bookdrop:/bookdrop
+    stop_grace_period: 30s
+    networks:
+      - booklore-network
+    ports:
+      - ${BOOKLORE_PORT:-6060}:6060
+  booklore-db:
+    container_name: booklore-db
+    image: ${MARIADB_IMAGE:-lscr.io/linuxserver/mariadb:11.4.8}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      PUID: ${USER_ID:-1000}
+      PGID: ${GROUP_ID:-1000}
+      TZ: ${TZ:-UTC}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?}
+      MYSQL_DATABASE: ${DATABASE_NAME:-booklore}
+      MYSQL_USER: ${DATABASE_USERNAME:-booklore}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD:?}
+    # Upstream-documented healthcheck (example-docker/docker-compose.yml);
+    # required by the app's depends_on and validated during the Stage A gate.
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - booklore-db:/config
+    networks:
+      - booklore-network
+  booklore-remoteauth-proxy:
+    container_name: booklore-remoteauth-proxy
+    # Distinct tag so a rebuild never clobbers the published image.
+    image: ${BOOKLORE_REMOTEAUTH_PROXY_IMAGE:-localhost/booklore-remoteauth-proxy:latest}
+    build:
+      # Relative build context: layered runs MUST pass
+      # `--project-directory .` (PITFALLS P-061) so `context: .` resolves
+      # to build/<env>/entire-remoteauth/ (where stackbuilder copies the
+      # nginx template next to this merged fragment —
+      # copy_additional_files = true in stackbuilder.toml).
+      context: .
+      dockerfile_inline: |
+        FROM nginx:alpine
+        COPY default.conf.template /etc/nginx/templates/default.conf.template
+    # The official nginx image envsubst's /etc/nginx/templates/*.template
+    # with the container's declared env vars only — nginx runtime vars
+    # ($host, $remote_addr, ...) survive substitution.
+    environment:
+      # Upstream <service>:<port> of the base booklore service.
+      EXTAUTH_UPSTREAM: ${EXTAUTH_UPSTREAM:-booklore:6060}
+      # Header names injected/stripped — must match REMOTE_AUTH_HEADER_*.
+      EXTAUTH_HEADER_USER: ${REMOTE_AUTH_HEADER_USER:-remote-user}
+      EXTAUTH_HEADER_NAME: ${REMOTE_AUTH_HEADER_NAME:-remote-name}
+      EXTAUTH_HEADER_EMAIL: ${REMOTE_AUTH_HEADER_EMAIL:-remote-email}
+      EXTAUTH_HEADER_GROUPS: ${REMOTE_AUTH_HEADER_GROUPS:-remote-groups}
+      # Identity to inject; any empty value = that header is not sent
+      # (_client-supplied copies are still stripped) and BookLore shows
+      # its normal login page.
+      EXTAUTH_USER: ${EXTAUTH_USER:-}
+      EXTAUTH_NAME: ${EXTAUTH_NAME:-}
+      EXTAUTH_EMAIL: ${EXTAUTH_EMAIL:-}
+      EXTAUTH_GROUPS: ${EXTAUTH_GROUPS:-}
+    ports:
+      - "${BOOKLORE_REMOTEAUTH_PORT:-6061}:80"
+    depends_on:
+      - booklore
+    healthcheck:
+      # 127.0.0.1, not localhost: nginx listens IPv4-only and Alpine
+      # resolves localhost to ::1 first (connection refused).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - booklore-network
+volumes:
+  booklore-data:
+    name: booklore-data
+  booklore-books:
+    name: booklore-books
+  booklore-bookdrop:
+    name: booklore-bookdrop
+  booklore-db:
+    name: booklore-db
+networks:
+  booklore-network:
+    name: booklore-network

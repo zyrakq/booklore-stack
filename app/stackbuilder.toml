@@ -4,14 +4,16 @@ environments_path = "./environments"
 [build]
 skip_base_generation = true
 yaml_merger = "yq"
-# Copy non-compose files (the s3fs-fuse entrypoint script) from component
-# dirs into the generated build dirs.
+# Copy non-compose files (the s3fs-fuse entrypoint script, the
+# remote-auth nginx template) from component dirs into the generated
+# build dirs.
 copy_additional_files = true
 # Extension pool: oidc is mandatory infra (§10) — provider configured via
 # the app's settings UI (stored in MariaDB, no env surface). step-ca-trust
 # is mandatory infra for the step-ca environment (JVM outbound TLS trust).
 # s3fs-fuse is the optional RustFS-backed library (no native S3 backend).
-extensions = ["oidc", "step-ca-trust", "s3fs-fuse"]
+# remote-auth is the optional forward-auth wiring (bundled nginx proxy).
+extensions = ["oidc", "step-ca-trust", "s3fs-fuse", "remote-auth"]
 
 [build.combos]
 # ONE base combo = the functional base (app + mandatory MariaDB booklore-db
@@ -23,6 +25,10 @@ entire-trust = ["oidc", "step-ca-trust"]
 # kept out of entire-trust so the two entrypoint-replacing fragments
 # never merge into one variant).
 entire-s3fs = ["oidc", "s3fs-fuse"]
+# remote-auth gate combo: forward-auth via the bundled nginx proxy
+# (forwarding env — kept out of entire-s3fs so the two image-replacing
+# fragments never merge into one variant).
+entire-remoteauth = ["oidc", "remote-auth"]
 
 [build.environments]
 available = ["forwarding", "letsencrypt", "step-ca"]
@@ -30,9 +36,10 @@ available = ["forwarding", "letsencrypt", "step-ca"]
 [build.environments.forwarding]
 # s3fs-fuse: gate env for the RustFS-backed library (omnibus precedent —
 # the fragment declares the external step-ca-network toward
-# http://rustfs:9000).
-extensions = ["s3fs-fuse"]
-combos = ["entire", "entire-s3fs"]
+# http://rustfs:9000). remote-auth: gate env for forward-auth via the
+# bundled booklore-remoteauth-proxy (:6061).
+extensions = ["s3fs-fuse", "remote-auth"]
+combos = ["entire", "entire-s3fs", "entire-remoteauth"]
 
 [build.environments.letsencrypt]
 extensions = []
