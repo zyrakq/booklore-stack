@@ -67,11 +67,11 @@ cannot boot.
 
 | extension | type | status | dependencies |
 |-----------|------|--------|--------------|
-| oidc (§10 UI-configured) | infra | available | OIDC provider; issuer + client entered in-app (redirect URI on the provider side); `FORCE_DISABLE_OIDC` env exists for an escape hatch |
+| oidc (§10 UI-configured) | infra | **implemented** | Provider configured **in-app** (Settings → OIDC): issuer `https://kanidm.af/oauth2/openid/booklore`, client `booklore`, scopes `openid profile email groups`, claims `preferred_username`/`email`/`given_name`/`groups` — stored in MariaDB `app_settings` (V127), so the fragment only asserts `FORCE_DISABLE_OIDC=false`. Provider side (kanidm): redirects `http://localhost:6060/oauth2-callback` + `https://booklore.af/oauth2-callback`, group `booklore_users`. Gate PASSED (browser SSO login as `booklore_test@kanidm.af`, auto-provisioned user, dashboard reached); app-side "auto-provision" must be switched ON in the same settings form before JIT users can log in. |
 | Remote-auth reverse proxy (`REMOTE_AUTH_*` headers) | product | available | forward-auth-capable proxy; upstream doc `docs/forward-auth-with-proxy.md` |
 | SMTP (email→PDF delivery) | product | available | SMTP server; configured in app settings UI (not compose env) |
 | s3fs-fuse on `/books` `/bookdrop` | infra | available | RustFS/S3 bucket; never on `/app/data` or DB volume |
-| TLS reverse proxy / step-ca-trust (public origin + secure-cookie overlay) | infra | available | step-ca / proxy layer |
+| TLS reverse proxy / step-ca-trust (public origin + secure-cookie overlay) | infra | **implemented** | env fragment (`STEP_CA_TRUST`/`STEP_CA_TRUST_RESTART`) wired into the `step-ca` environment; companion installs the bundle into `/usr/local/share/ca-certificates`. JVM caveat: the JVM does NOT read that path — the step-ca root CA must also land in the Java `cacerts` truststore (keytool import) for OIDC back-channel calls (PKIX). Stage validated in the forwarding gate by importing the CA directly into the container's cacerts. |
 
 **Maintenance-status note**: upstream HEAD commit (`01b3407`) announces
 **BookOrbit** as the successor of BookLore — overlap risk with the
@@ -103,3 +103,9 @@ before major rework cycles here.
   (V127) and no env surface exists — the §10 UI-only OIDC pattern
   applies as recorded; gate confirms post-deploy in-app configuration
   flow if/when the `oidc` extension is implemented.
+  **VALIDATED** (Stage B extension gate: UI-entered Kanidm provider →
+  browser SSO login → JIT auto-provisioned user, after enabling the
+  app's auto-provision switch in the same UI form). Journey caveats:
+  the JVM needs the step-ca root CA in its `cacerts` (companion's
+  `/usr/local/share/ca-certificates` path is invisible to Java), and
+  container **recreate** wipes that import (restart preserves it).

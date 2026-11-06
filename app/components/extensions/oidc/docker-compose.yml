@@ -1,0 +1,8 @@
+services:
+  booklore:
+    environment:
+      # Provider config (issuer URI, client ID/secret) is entered in the
+      # app's settings UI and stored in MariaDB (V127__Add_oidc_schema.sql)
+      # — no env vars for it. Web callback: <origin>/oauth2-callback.
+      # Re-asserted so the functional base is guaranteed OIDC-enabled.
+      FORCE_DISABLE_OIDC: ${FORCE_DISABLE_OIDC:-false}

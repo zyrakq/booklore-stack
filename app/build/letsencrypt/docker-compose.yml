@@ -1,0 +1,105 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-10m}
+    max-file: ${LOG_MAX_FILE:-3}
+    compress: ${LOG_COMPRESS:-true}
+services:
+  # Fresh named volumes (booklore-books, booklore-bookdrop) are created
+  # root-owned; the app's finalize step then fails with "Failed to move
+  # file". A one-shot chown fixes ownership before the app starts
+  # (validated during the Stage A gate).
+  booklore-vol-init:
+    container_name: booklore-vol-init
+    image: ${IMAGE:-ghcr.io/booklore-app/booklore:latest}
+    user: root
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c", "chown -R ${USER_ID:-1000}:${GROUP_ID:-1000} /books /bookdrop /app/data"]
+    volumes:
+      - booklore-data:/app/data
+      - booklore-books:/books
+      - booklore-bookdrop:/bookdrop
+    networks:
+      - booklore-network
+  booklore:
+    container_name: booklore
+    image: ${IMAGE:-ghcr.io/booklore-app/booklore:latest}
+    restart: unless-stopped
+    init: true
+    logging: *default-logging
+    environment:
+      USER_ID: ${USER_ID:-1000}
+      GROUP_ID: ${GROUP_ID:-1000}
+      TZ: ${TZ:-UTC}
+      DATABASE_URL: jdbc:mariadb://booklore-db:3306/${DATABASE_NAME:-booklore}
+      DATABASE_USERNAME: ${DATABASE_USERNAME:-booklore}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-false}
+      # Provider config (issuer URI, client ID/secret) is entered in the
+      # app's settings UI and stored in MariaDB (V127__Add_oidc_schema.sql)
+      # — no env vars for it. Web callback: <origin>/oauth2-callback.
+      # Re-asserted so the functional base is guaranteed OIDC-enabled.
+      FORCE_DISABLE_OIDC: ${FORCE_DISABLE_OIDC:-false}
+      VIRTUAL_PORT: ${VIRTUAL_PORT:-6060}
+      VIRTUAL_HOST: ${VIRTUAL_HOST:?}
+      LETSENCRYPT_HOST: ${LETSENCRYPT_HOST:?}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:?}
+    depends_on:
+      booklore-db:
+        condition: service_healthy
+      booklore-vol-init:
+        condition: service_completed_successfully
+    # Upstream-documented healthcheck (example-docker/docker-compose.yml);
+    # validated during the Stage A gate.
+    healthcheck:
+      test: wget -q -O - http://localhost:6060/api/v1/healthcheck
+      interval: 60s
+      retries: 5
+      start_period: 60s
+      timeout: 10s
+    volumes:
+      - booklore-data:/app/data
+      - booklore-books:/books
+      - booklore-bookdrop:/bookdrop
+    stop_grace_period: 30s
+    networks:
+      - booklore-network
+      - letsencrypt-network
+  booklore-db:
+    container_name: booklore-db
+    image: ${MARIADB_IMAGE:-lscr.io/linuxserver/mariadb:11.4.8}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      PUID: ${USER_ID:-1000}
+      PGID: ${GROUP_ID:-1000}
+      TZ: ${TZ:-UTC}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?}
+      MYSQL_DATABASE: ${DATABASE_NAME:-booklore}
+      MYSQL_USER: ${DATABASE_USERNAME:-booklore}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD:?}
+    # Upstream-documented healthcheck (example-docker/docker-compose.yml);
+    # required by the app's depends_on and validated during the Stage A gate.
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - booklore-db:/config
+    networks:
+      - booklore-network
+volumes:
+  booklore-data:
+    name: booklore-data
+  booklore-books:
+    name: booklore-books
+  booklore-bookdrop:
+    name: booklore-bookdrop
+  booklore-db:
+    name: booklore-db
+networks:
+  booklore-network:
+    name: booklore-network
+  letsencrypt-network:
+    external: true
