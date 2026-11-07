@@ -6,10 +6,6 @@ x-logging: &default-logging
     compress: ${LOG_COMPRESS:-true}
 
 services:
-  # Fresh named volumes (booklore-books, booklore-bookdrop) are created
-  # root-owned; the app's finalize step then fails with "Failed to move
-  # file". A one-shot chown fixes ownership before the app starts
-  # (validated during the Stage A gate).
   booklore-vol-init:
     container_name: booklore-vol-init
     image: ${IMAGE:-ghcr.io/booklore-app/booklore:latest}
@@ -43,8 +39,6 @@ services:
         condition: service_healthy
       booklore-vol-init:
         condition: service_completed_successfully
-    # Upstream-documented healthcheck (example-docker/docker-compose.yml);
-    # validated during the Stage A gate.
     healthcheck:
       test: wget -q -O - http://localhost:6060/api/v1/healthcheck
       interval: 60s
@@ -72,8 +66,6 @@ services:
       MYSQL_DATABASE: ${DATABASE_NAME:-booklore}
       MYSQL_USER: ${DATABASE_USERNAME:-booklore}
       MYSQL_PASSWORD: ${DATABASE_PASSWORD:?}
-    # Upstream-documented healthcheck (example-docker/docker-compose.yml);
-    # required by the app's depends_on and validated during the Stage A gate.
     healthcheck:
       test: [ "CMD", "mariadb-admin", "ping", "-h", "localhost" ]
       interval: 5s
